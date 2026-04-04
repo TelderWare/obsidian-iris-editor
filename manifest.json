@@ -1,0 +1,9 @@
+{
+  "id": "iris-editor",
+  "name": "Iris Editor",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Auto-formatting as you type: wiki links, sentence capitalization, number spelling, multiplication signs, chemical formulas, date formatting, text shortcuts, and more.",
+  "author": "mgodd",
+  "isDesktopOnly": false
+}

@@ -1,0 +1,41 @@
+.iris-shortcut-categories {
+  margin-bottom: 12px;
+}
+
+.iris-shortcut-group {
+  margin-bottom: 2px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 0 8px;
+}
+
+.iris-shortcut-group summary {
+  cursor: pointer;
+  font-weight: 500;
+  padding: 6px 0;
+  color: var(--text-normal);
+}
+
+.iris-shortcut-table {
+  width: 100%;
+  margin: 4px 0 8px 0;
+  font-size: 0.9em;
+  border-collapse: collapse;
+}
+
+.iris-shortcut-table tr:hover {
+  background: var(--background-modifier-hover);
+}
+
+.iris-shortcut-table td {
+  padding: 2px 8px 2px 0;
+}
+
+.iris-shortcut-key {
+  font-family: var(--font-monospace);
+  color: var(--text-accent);
+}
+
+.iris-shortcut-value {
+  font-family: var(--font-monospace);
+}
