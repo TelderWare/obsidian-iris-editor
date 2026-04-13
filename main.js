@@ -66,7 +66,7 @@ class IrisEditorPlugin extends obsidian.Plugin {
         this._editPassCount++;
         if (this._editPassResetTimer) clearTimeout(this._editPassResetTimer);
         this._editPassResetTimer = setTimeout(() => { this._editPassCount = 0; }, 200);
-        if (this._editPassCount > 6) return;
+        if (this._editPassCount > 2) return;
         this._contextCache = null;
         if (!this.isFileInScope(this.app.workspace.getActiveFile())) return;
         this.applyShortcuts(editor);
@@ -142,7 +142,7 @@ class IrisEditorPlugin extends obsidian.Plugin {
         this.applyPureDeletes(editor);
         this.applyFarLinks(editor);
         this.detectNearCursor(editor);
-      }, 200)
+      }, 500)
     );
   }
 
@@ -841,8 +841,10 @@ class IrisEditorPlugin extends obsidian.Plugin {
         if (bodyStart < lineCount) bodyStart++; // skip closing ---
       }
       while (bodyStart < lineCount && editor.getLine(bodyStart).trim() === '' && bodyStart !== cursorLine) {
+        const prevCount = lineCount;
         editor.replaceRange('', { line: bodyStart, ch: 0 }, { line: Math.min(bodyStart + 1, lineCount), ch: 0 });
         lineCount = editor.lineCount();
+        if (lineCount >= prevCount) break;
       }
 
       let i = 0;
@@ -856,8 +858,10 @@ class IrisEditorPlugin extends obsidian.Plugin {
 
         // Remove empty bullet points on non-cursor lines
         if (i !== cursorLine && /^\s*[-*+]\s*$/.test(line)) {
+          const prevCount = lineCount;
           editor.replaceRange('', { line: i, ch: 0 }, { line: Math.min(i + 1, lineCount), ch: 0 });
           lineCount = editor.lineCount();
+          if (lineCount >= prevCount) { i++; continue; }
           continue;
         }
 
@@ -895,6 +899,9 @@ class IrisEditorPlugin extends obsidian.Plugin {
         // Skip trailing blank runs when cursor is in or past them (let user add space at end)
         if (blankEnd >= lineCount && cursorLine >= blankStart) { break; }
 
+        // Skip blank runs the cursor is inside (let user add newlines freely)
+        if (cursorLine >= blankStart && cursorLine < blankEnd) continue;
+
         // No blank lines between a heading and its content (but keep one if next line is also a heading and blankBeforeHeadings is on)
         const afterHeading = blankStart > 0 && RE_HEADING.test(editor.getLine(blankStart - 1));
         const beforeHeading = blankEnd < lineCount && RE_HEADING.test(editor.getLine(blankEnd));
@@ -903,18 +910,20 @@ class IrisEditorPlugin extends obsidian.Plugin {
         if (blankCount > effective) {
           const keepEnd = blankStart + effective;
           const deleteEnd = blankStart + blankCount;
+          const prevCount = lineCount;
           editor.replaceRange(
             '',
             { line: keepEnd, ch: 0 },
             { line: deleteEnd, ch: 0 }
           );
           lineCount = editor.lineCount();
+          const actualDeleted = prevCount - lineCount;
           // If cursor was inside the deleted range, move it to the last kept blank line
-          if (cursorLine >= keepEnd && cursorLine < deleteEnd) {
+          if (actualDeleted > 0 && cursorLine >= keepEnd && cursorLine < deleteEnd) {
             const dest = effective > 0 ? keepEnd - 1 : keepEnd;
             editor.setCursor({ line: dest, ch: 0 });
           }
-          i -= (blankCount - effective);
+          i -= actualDeleted;
         }
       }
 
