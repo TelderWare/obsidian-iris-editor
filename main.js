@@ -17,11 +17,13 @@ const RE_TRAILING_FORMAT = /[*_~=]+$/;
 const RE_WIKILINK_TOKEN = /^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/;
 const RE_BARE_URL = /https?:\/\/[^\s<>\[\]]+/g;
 const RE_ANGLE_URL = /<https?:\/\/[^>]+>/g;
+const RE_WIKILINK_SCAN = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
 const RE_URL_TRAIL = /[.,;:!?'")\]]+$/;
 const RE_IS_URL = /^https?:\/\/\S+$/;
 const RE_ORDERED_ITEM = /^(\s*)\d+\.\s/;
 const RE_TASK_ITEM = /^(\s*)- \[([ xX])\]\s/;
 const RE_DATE_SLASH = /(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/;
+const RE_TABLE_LINE = /^\s{0,3}\|/;
 const ABBREVS = new Set(['e.g', 'i.e', 'etc', 'vs', 'Dr', 'Mr', 'Mrs', 'Ms', 'Prof', 'Jr', 'Sr', 'St', 'Inc', 'Ltd', 'Co', 'Corp', 'al', 'fig', 'eq', 'no', 'vol', 'dept', 'govt', 'approx', 'est', 'ref', 'max', 'min', 'avg']);
 
 const DEFAULT_SHORTCUTS = '# Arrows\n-> = \u2192\n<- = \u2190\n=> = \u21D2\n\\to = \u2192\n\\gets = \u2190\n\\rightarrow = \u2192\n\\leftarrow = \u2190\n\\Rightarrow = \u21D2\n\\Leftarrow = \u21D0\n\\Leftrightarrow = \u21D4\n\\leftrightarrow = \u2194\n\\uparrow = \u2191\n\\downarrow = \u2193\n\\mapsto = \u21A6\n\\nearrow = \u2197\n\\searrow = \u2198\n# Greek lowercase\nalpha = \u03B1\nbeta = \u03B2\ngamma = \u03B3\ndelta = \u03B4\nepsilon = \u03B5\nvarepsilon = \u03B5\nzeta = \u03B6\neta = \u03B7\ntheta = \u03B8\nvartheta = \u03D1\niota = \u03B9\nkappa = \u03BA\nlambda = \u03BB\nmu = \u03BC\nnu = \u03BD\nxi = \u03BE\npi = \u03C0\nrho = \u03C1\nsigma = \u03C3\nvarsigma = \u03C2\ntau = \u03C4\nupsilon = \u03C5\nphi = \u03C6\nvarphi = \u03C6\nchi = \u03C7\npsi = \u03C8\nomega = \u03C9\n# Greek uppercase\nGamma = \u0393\nDelta = \u0394\nTheta = \u0398\nLambda = \u039B\nXi = \u039E\nPi = \u03A0\nSigma = \u03A3\nUpsilon = \u03A5\nPhi = \u03A6\nPsi = \u03A8\nOmega = \u03A9\n# Math operators\n\\pm = \u00B1\n\\mp = \u2213\n\\times = \u00D7\n\\div = \u00F7\n\\cdot = \u00B7\n\\sqrt = \u221A\n\\infty = \u221E\n\\partial = \u2202\n\\nabla = \u2207\n\\sum = \u2211\n\\prod = \u220F\n\\int = \u222B\n\\oint = \u222E\n\\oplus = \u2295\n\\otimes = \u2297\n# Relations\n\\leq = \u2264\n\\le = \u2264\n\\geq = \u2265\n\\ge = \u2265\n\\neq = \u2260\n\\ne = \u2260\n\\approx = \u2248\n\\equiv = \u2261\n\\sim = \u223C\n\\simeq = \u2243\n\\cong = \u2245\n\\propto = \u221D\n\\ll = \u226A\n\\gg = \u226B\n# Set theory and logic\n\\in = \u2208\n\\notin = \u2209\n\\subset = \u2282\n\\supset = \u2283\n\\subseteq = \u2286\n\\supseteq = \u2287\n\\cup = \u222A\n\\cap = \u2229\n\\emptyset = \u2205\n\\forall = \u2200\n\\exists = \u2203\n\\neg = \u00AC\n\\land = \u2227\n\\lor = \u2228\n\\vdash = \u22A2\n\\top = \u22A4\n\\bot = \u22A5\n# Miscellaneous\n\\degree = \u00B0\n\\deg = \u00B0\n\\dagger = \u2020\n\\ddagger = \u2021\n\\bullet = \u2022\n\\circ = \u2218\n\\star = \u22C6\n\\langle = \u27E8\n\\rangle = \u27E9\n\\ldots = \u2026\n\\hbar = \u210F\n\\ell = \u2113\n\\aleph = \u2135\n# Typography\n(c) = \u00A9\n(r) = \u00AE\n(tm) = \u2122\n# Pure deletes\n%% iris:content %% = ';
@@ -51,12 +53,31 @@ class IrisEditorPlugin extends obsidian.Plugin {
     this.refreshNoteNames();
     this.parseShortcuts();
 
+    this.setupCustomWordCount();
+
     this.registerEvent(this.app.vault.on('create', () => this.debouncedRefresh()));
     this.registerEvent(this.app.vault.on('delete', () => this.debouncedRefresh()));
     this.registerEvent(this.app.vault.on('rename', () => this.debouncedRefresh()));
     this.registerEvent(this.app.metadataCache.on('changed', () => this.debouncedRefresh()));
 
     this.addSettingTab(new IrisEditorSettingTab(this.app, this));
+
+    // Word count: update on leaf change, editor change, selection change, layout change
+    this.app.workspace.onLayoutReady(() => {
+      this.updateCustomWordCount({ totalChanged: true });
+    });
+    this.registerEvent(
+      this.app.workspace.on('active-leaf-change', () => {
+        this.invalidateWordCountCache();
+        this.updateCustomWordCount({ totalChanged: true });
+      })
+    );
+    this.registerDomEvent(document, 'selectionchange', () => this.scheduleSelWcUpdate());
+    this.registerEvent(
+      this.app.workspace.on('layout-change', () => {
+        this.updateCustomWordCount({ totalChanged: true });
+      })
+    );
 
     // On edit: detect matches near cursor, apply far ones immediately
     this.registerEvent(
@@ -76,6 +97,7 @@ class IrisEditorPlugin extends obsidian.Plugin {
         this.applySpellOutNumbers(editor);
         this.applyMultiplicationSign(editor);
 
+        this.applyHeadingPromotion(editor);
         this.ensureBlankBeforeHeadings(editor);
         this.renumberOrderedLists(editor);
         this.sortTaskLists(editor);
@@ -83,6 +105,7 @@ class IrisEditorPlugin extends obsidian.Plugin {
         this.applyPureDeletes(editor);
         this.applyFarLinks(editor);
         this.detectNearCursor(editor);
+        this.scheduleEditWcUpdate();
       })
     );
 
@@ -107,17 +130,28 @@ class IrisEditorPlugin extends obsidian.Plugin {
       name: 'Full scan for links',
       hotkeys: [{ modifiers: ['Mod'], key: 's' }],
       editorCallback: (editor) => {
-        if (!this.isFileInScope(this.app.workspace.getActiveFile())) return;
+        const file = this.app.workspace.getActiveFile();
+        if (!this.isFileInScope(file)) return;
         this.fullScan(editor);
+        this.applyAutoAliases(file);
       },
+    });
+
+    // Wikipedia-style dedup of links in selection
+    this.addCommand({
+      id: 'dedup-links-in-selection',
+      name: 'Dedup links in selection (Wikipedia-style)',
+      editorCallback: (editor) => this.dedupLinksInSelection(editor),
     });
 
     // Full scan on file open
     this.registerEvent(
       this.app.workspace.on('file-open', () => {
-        if (!this.isFileInScope(this.app.workspace.getActiveFile())) return;
+        const file = this.app.workspace.getActiveFile();
+        if (!this.isFileInScope(file)) return;
         const view = this.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
         if (view) this.fullScan(view.editor);
+        this.applyAutoAliases(file);
       })
     );
 
@@ -135,6 +169,7 @@ class IrisEditorPlugin extends obsidian.Plugin {
         this._lastPollCursor = { line: cursor.line, ch: cursor.ch };
         if (!this.isFileInScope(this.app.workspace.getActiveFile())) return;
         const editor = view.editor;
+        this.applyHeadingPromotion(editor);
         this.ensureBlankBeforeHeadings(editor);
         this.renumberOrderedLists(editor);
         this.sortTaskLists(editor);
@@ -158,6 +193,7 @@ class IrisEditorPlugin extends obsidian.Plugin {
     this.spellOutNumbers = data?.spellOutNumbers !== undefined ? data.spellOutNumbers : true;
     this.multiplicationSign = data?.multiplicationSign !== undefined ? data.multiplicationSign : true;
     this.blankBeforeHeadings = data?.blankBeforeHeadings !== undefined ? data.blankBeforeHeadings : true;
+    this.promoteHeadings = data?.promoteHeadings !== undefined ? data.promoteHeadings : true;
 
     this.limitNewlines = data?.limitNewlines !== undefined ? data.limitNewlines : true;
     this.maxBlankLines = data?.maxBlankLines !== undefined ? data.maxBlankLines : 1;
@@ -169,9 +205,20 @@ class IrisEditorPlugin extends obsidian.Plugin {
     this.excludeFromFolder = data?.excludeFromFolder || '';
     this.linkShortNames = data?.linkShortNames !== undefined ? data.linkShortNames : true;
     this.extraAliasKeys = data?.extraAliasKeys !== undefined ? data.extraAliasKeys : 'aliases2';
+    this.autoAlias = data?.autoAlias !== undefined ? data.autoAlias : true;
     this.autoFormatDates = data?.autoFormatDates !== undefined ? data.autoFormatDates : true;
     this.dateInputUS = data?.dateInputUS !== undefined ? data.dateInputUS : true;
     this.dateOutputFormat = data?.dateOutputFormat || 'DD/MM/YYYY';
+    this.customWordCount = data?.customWordCount !== undefined ? data.customWordCount : true;
+    this.wcIncludeHeadings = data?.wcIncludeHeadings !== undefined ? data.wcIncludeHeadings : false;
+    this.wcIncludeCodeBlocks = data?.wcIncludeCodeBlocks !== undefined ? data.wcIncludeCodeBlocks : false;
+    this.wcIncludeFrontmatter = data?.wcIncludeFrontmatter !== undefined ? data.wcIncludeFrontmatter : false;
+    this.wcIncludeComments = data?.wcIncludeComments !== undefined ? data.wcIncludeComments : false;
+    this.wcIncludeBlockQuotes = data?.wcIncludeBlockQuotes !== undefined ? data.wcIncludeBlockQuotes : false;
+    this.wcIncludeFootnotes = data?.wcIncludeFootnotes !== undefined ? data.wcIncludeFootnotes : false;
+    this.wcIncludeCitations = data?.wcIncludeCitations !== undefined ? data.wcIncludeCitations : false;
+    this.wcIncludeTables = data?.wcIncludeTables !== undefined ? data.wcIncludeTables : false;
+    this.wcIncludeMath = data?.wcIncludeMath !== undefined ? data.wcIncludeMath : false;
   }
 
   async saveSettings() {
@@ -186,6 +233,7 @@ class IrisEditorPlugin extends obsidian.Plugin {
       spellOutNumbers: this.spellOutNumbers,
       multiplicationSign: this.multiplicationSign,
       blankBeforeHeadings: this.blankBeforeHeadings,
+      promoteHeadings: this.promoteHeadings,
 
       limitNewlines: this.limitNewlines,
       maxBlankLines: this.maxBlankLines,
@@ -197,9 +245,20 @@ class IrisEditorPlugin extends obsidian.Plugin {
       excludeFromFolder: this.excludeFromFolder,
       linkShortNames: this.linkShortNames,
       extraAliasKeys: this.extraAliasKeys,
+      autoAlias: this.autoAlias,
       autoFormatDates: this.autoFormatDates,
       dateInputUS: this.dateInputUS,
       dateOutputFormat: this.dateOutputFormat,
+      customWordCount: this.customWordCount,
+      wcIncludeHeadings: this.wcIncludeHeadings,
+      wcIncludeCodeBlocks: this.wcIncludeCodeBlocks,
+      wcIncludeFrontmatter: this.wcIncludeFrontmatter,
+      wcIncludeComments: this.wcIncludeComments,
+      wcIncludeBlockQuotes: this.wcIncludeBlockQuotes,
+      wcIncludeFootnotes: this.wcIncludeFootnotes,
+      wcIncludeCitations: this.wcIncludeCitations,
+      wcIncludeTables: this.wcIncludeTables,
+      wcIncludeMath: this.wcIncludeMath,
     });
     // Re-apply transformations to active document
     const view = this.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
@@ -307,6 +366,75 @@ class IrisEditorPlugin extends obsidian.Plugin {
     }
   }
 
+  // Scan note body for "AKA X" / "also known as X" and add captured names to frontmatter aliases
+  async applyAutoAliases(file) {
+    if (!this.autoAlias || !file || file.extension !== 'md') return;
+
+    let content;
+    try { content = await this.app.vault.read(file); } catch (e) { return; }
+
+    // Strip frontmatter and code blocks before scanning
+    const lines = content.split('\n');
+    let inFrontmatter = false;
+    let inCodeBlock = false;
+    let scanText = '';
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (i === 0 && line === '---') { inFrontmatter = true; continue; }
+      if (inFrontmatter) { if (line === '---') inFrontmatter = false; continue; }
+      if (RE_CODE_FENCE.test(line)) { inCodeBlock = !inCodeBlock; continue; }
+      if (inCodeBlock) continue;
+      scanText += line + '\n';
+    }
+
+    const RE_AKA = /\b(?:AKA|a\.k\.a\.?|also known as)\b\s*[:\-]?\s+([^.;!?\n)\]}]+)/gi;
+    const candidates = [];
+    let m;
+    while ((m = RE_AKA.exec(scanText)) !== null) {
+      for (const part of m[1].split(',')) {
+        const cleaned = this._cleanAliasCandidate(part);
+        if (cleaned) candidates.push(cleaned);
+      }
+    }
+    if (candidates.length === 0) return;
+
+    try {
+      await this.app.fileManager.processFrontMatter(file, (fm) => {
+        let aliases = fm.aliases;
+        if (aliases === undefined || aliases === null) aliases = [];
+        else if (!Array.isArray(aliases)) aliases = [aliases];
+
+        const existingLower = new Set(aliases.map(a => String(a).toLowerCase()));
+        existingLower.add(file.basename.toLowerCase());
+
+        let changed = false;
+        for (const c of candidates) {
+          const cl = c.toLowerCase();
+          if (!existingLower.has(cl)) {
+            aliases.push(c);
+            existingLower.add(cl);
+            changed = true;
+          }
+        }
+        if (changed) fm.aliases = aliases;
+      });
+    } catch (e) { /* ignore */ }
+  }
+
+  _cleanAliasCandidate(s) {
+    let t = s.trim();
+    t = t.replace(/^["'“‘`]+/, '').replace(/["'”’`]+$/, '');
+    const wl = t.match(/^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
+    if (wl) t = (wl[2] || wl[1]).trim();
+    const ml = t.match(/^\[([^\]]+)\]\([^)]+\)$/);
+    if (ml) t = ml[1].trim();
+    t = t.replace(/^[*_~=]+/, '').replace(/[*_~=]+$/, '');
+    t = t.replace(/[.,;:!?]+$/, '').trim();
+    if (t.length < 2) return null;
+    if (t.split(/\s+/).length > 6) return null;
+    return t;
+  }
+
   // Rebuild boundary cache: stores frontmatter end line and code fence toggle lines
   _rebuildContextCache(editor) {
     const lineCount = editor.lineCount();
@@ -348,6 +476,8 @@ class IrisEditorPlugin extends obsidian.Plugin {
     // If targetLine is itself a fence line, it's a boundary — skip it
     if (cache.codeFences.includes(targetLine)) return { skip: true };
 
+    if (!inCode && RE_TABLE_LINE.test(editor.getLine(targetLine))) return { skip: true };
+
     return { skip: inCode };
   }
 
@@ -366,15 +496,89 @@ class IrisEditorPlugin extends obsidian.Plugin {
     const ctx = this.getLineContext(editor, lineNum);
     if (ctx.skip) return;
 
-    // Find new matches on this line
-    const matches = [];
-    this.findAllMatchesOnLine(line, lineNum, activeFile, matches);
-    this._pendingLinks.push(...matches);
+    // Find new matches on this line. Wikipedia-style dedup happens at write
+    // time in applyFarLinks against a fresh document scan — pending may hold
+    // duplicates here and that's fine.
+    this.findAllMatchesOnLine(line, lineNum, activeFile, this._pendingLinks);
+  }
+
+  // Wikipedia-style: keep only the first wiki link to each note in the selection;
+  // unwrap subsequent links to their display text. Embeds (![[...]]) are left alone.
+  dedupLinksInSelection(editor) {
+    const sel = editor.getSelection();
+    if (!sel) return;
+
+    const from = editor.getCursor('from');
+    const to = editor.getCursor('to');
+    const seen = new Set();
+    const re = /(!?)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+
+    let result = '';
+    let lastIdx = 0;
+    let m;
+    let replaced = 0;
+    while ((m = re.exec(sel)) !== null) {
+      result += sel.substring(lastIdx, m.index);
+      const isEmbed = m[1] === '!';
+      const target = m[2];
+      const display = m[3];
+      if (isEmbed) {
+        result += m[0];
+      } else {
+        const resolved = this.noteNameMap.get(target.toLowerCase());
+        const key = (resolved || target).toLowerCase();
+        if (seen.has(key)) {
+          result += display || target;
+          replaced++;
+        } else {
+          seen.add(key);
+          result += m[0];
+        }
+      }
+      lastIdx = m.index + m[0].length;
+    }
+    result += sel.substring(lastIdx);
+
+    if (replaced === 0) {
+      new obsidian.Notice('No duplicate links to dedup');
+      return;
+    }
+
+    this._replacing = true;
+    try {
+      editor.replaceRange(result, from, to);
+    } finally {
+      this._replacing = false;
+    }
+    new obsidian.Notice(`Deduped ${replaced} link${replaced === 1 ? '' : 's'}`);
+  }
+
+  // Scan document for names that already have a wiki link
+  scanExistingWikiLinks(editor) {
+    const linked = new Set();
+    const lineCount = editor.lineCount();
+    let inFrontmatter = false;
+    let inCodeBlock = false;
+    for (let i = 0; i < lineCount; i++) {
+      const line = editor.getLine(i);
+      if (i === 0 && line === '---') { inFrontmatter = true; continue; }
+      if (inFrontmatter) { if (line === '---') inFrontmatter = false; continue; }
+      if (RE_CODE_FENCE.test(line)) { inCodeBlock = !inCodeBlock; continue; }
+      if (inCodeBlock) continue;
+      RE_WIKILINK_SCAN.lastIndex = 0;
+      let m;
+      while ((m = RE_WIKILINK_SCAN.exec(line)) !== null) {
+        const resolved = this.noteNameMap.get(m[1].toLowerCase());
+        if (resolved) linked.add(resolved.toLowerCase());
+      }
+    }
+    return linked;
   }
 
   // Full document scan — chunked to avoid blocking UI
   fullScan(editor) {
     if (this._replacing) return;
+    this.applyHeadingPromotion(editor);
 
     const activeFile = this.app.workspace.getActiveFile();
     const lineCount = editor.lineCount();
@@ -395,6 +599,7 @@ class IrisEditorPlugin extends obsidian.Plugin {
         if (inFrontmatter) { if (line === '---') inFrontmatter = false; continue; }
         if (RE_CODE_FENCE.test(line)) { inCodeBlock = !inCodeBlock; continue; }
         if (inCodeBlock) continue;
+        if (RE_TABLE_LINE.test(line)) continue;
 
         this.findAllMatchesOnLine(line, lineNum, activeFile, pending);
       }
@@ -404,6 +609,8 @@ class IrisEditorPlugin extends obsidian.Plugin {
       if (startLine < lineCount) {
         setTimeout(processChunk, 0);
       } else {
+        // Pending may contain duplicates; applyFarLinks dedups against the
+        // live document at write time (Wikipedia-style first-occurrence-only).
         this._pendingLinks = pending;
         this.applyPureDeletes(editor);
         this.applyFarLinks(editor);
@@ -433,6 +640,14 @@ class IrisEditorPlugin extends obsidian.Plugin {
 
     this._pendingLinks = toKeep;
 
+    // Process autolinks in document order so first-occurrence wins.
+    toApply.sort((a, b) => a.line - b.line || a.start - b.start);
+
+    // Wikipedia-style: ground-truth set of names already linked anywhere in
+    // the document. Built fresh on every apply so manual edits, undo, paste,
+    // etc. are all reflected. Skip duplicates and add as we go.
+    const linkedNames = this.scanExistingWikiLinks(editor);
+
     // Build validated changes for a single transaction
     const changes = [];
     for (const r of toApply) {
@@ -453,6 +668,10 @@ class IrisEditorPlugin extends obsidian.Plugin {
           if ((r.start > 0 && RE_WORD_CHAR.test(line[r.start - 1])) ||
               (r.end < line.length && RE_WORD_CHAR.test(line[r.end]))) continue;
 
+          // Skip if this note is already linked anywhere in the document.
+          const nameKey = r.name.toLowerCase();
+          if (linkedNames.has(nameKey)) continue;
+
           const isEmbed = r.start === 0 && r.end === line.length;
           const inner = r.name === r.typed
             ? '[[' + r.typed + ']]'
@@ -463,6 +682,7 @@ class IrisEditorPlugin extends obsidian.Plugin {
             to: { line: r.line, ch: r.end },
             text: linkText,
           });
+          linkedNames.add(nameKey);
         }
     }
 
@@ -686,6 +906,7 @@ class IrisEditorPlugin extends obsidian.Plugin {
         if (inFrontmatter) { if (line === '---') inFrontmatter = false; i++; continue; }
         if (RE_CODE_FENCE.test(line)) { inCodeBlock = !inCodeBlock; i++; continue; }
         if (inCodeBlock) { i++; continue; }
+        if (RE_TABLE_LINE.test(line)) { i++; continue; }
 
         const m = line.match(RE_ORDERED_ITEM);
         if (!m) { i++; continue; }
@@ -740,6 +961,7 @@ class IrisEditorPlugin extends obsidian.Plugin {
         if (inFrontmatter) { if (line === '---') inFrontmatter = false; i++; continue; }
         if (RE_CODE_FENCE.test(line)) { inCodeBlock = !inCodeBlock; i++; continue; }
         if (inCodeBlock) { i++; continue; }
+        if (RE_TABLE_LINE.test(line)) { i++; continue; }
 
         const tm = line.match(RE_TASK_ITEM);
         if (!tm) { i++; continue; }
@@ -840,11 +1062,16 @@ class IrisEditorPlugin extends obsidian.Plugin {
         while (bodyStart < lineCount && editor.getLine(bodyStart) !== '---') bodyStart++;
         if (bodyStart < lineCount) bodyStart++; // skip closing ---
       }
-      while (bodyStart < lineCount && editor.getLine(bodyStart).trim() === '' && bodyStart !== cursorLine) {
-        const prevCount = lineCount;
-        editor.replaceRange('', { line: bodyStart, ch: 0 }, { line: Math.min(bodyStart + 1, lineCount), ch: 0 });
-        lineCount = editor.lineCount();
-        if (lineCount >= prevCount) break;
+      // Find end of leading blank run so we can skip if cursor is inside or right after it
+      let leadingBlankEnd = bodyStart;
+      while (leadingBlankEnd < lineCount && editor.getLine(leadingBlankEnd).trim() === '') leadingBlankEnd++;
+      if (cursorLine < bodyStart || cursorLine > leadingBlankEnd) {
+        while (bodyStart < lineCount && editor.getLine(bodyStart).trim() === '') {
+          const prevCount = lineCount;
+          editor.replaceRange('', { line: bodyStart, ch: 0 }, { line: Math.min(bodyStart + 1, lineCount), ch: 0 });
+          lineCount = editor.lineCount();
+          if (lineCount >= prevCount) break;
+        }
       }
 
       let i = 0;
@@ -855,6 +1082,7 @@ class IrisEditorPlugin extends obsidian.Plugin {
         if (inFrontmatter) { if (line === '---') inFrontmatter = false; i++; continue; }
         if (RE_CODE_FENCE.test(line)) { inCodeBlock = !inCodeBlock; i++; continue; }
         if (inCodeBlock) { i++; continue; }
+        if (i !== cursorLine && RE_TABLE_LINE.test(line)) { i++; continue; }
 
         // Remove empty bullet points on non-cursor lines
         if (i !== cursorLine && /^\s*[-*+]\s*$/.test(line)) {
@@ -961,6 +1189,7 @@ class IrisEditorPlugin extends obsidian.Plugin {
         if (RE_CODE_FENCE.test(line)) { inCodeBlock = !inCodeBlock; i++; continue; }
         if (inCodeBlock) { i++; continue; }
         if (i === cursorLine) { i++; continue; }
+        if (RE_TABLE_LINE.test(line)) { i++; continue; }
 
         let modified = line;
         for (const [pattern] of deletes) {
@@ -1318,6 +1547,46 @@ class IrisEditorPlugin extends obsidian.Plugin {
     }
   }
 
+  applyHeadingPromotion(editor) {
+    if (!this.promoteHeadings) return;
+    const cursorLine = editor.getCursor().line;
+    const lineCount = editor.lineCount();
+    let inCodeBlock = false;
+    let inFrontmatter = false;
+    let minLevel = 7;
+    const headingLines = [];
+
+    for (let i = 0; i < lineCount; i++) {
+      const line = editor.getLine(i);
+      if (i === 0 && line === '---') { inFrontmatter = true; continue; }
+      if (inFrontmatter) { if (line === '---') inFrontmatter = false; continue; }
+      if (RE_CODE_FENCE.test(line)) { inCodeBlock = !inCodeBlock; continue; }
+      if (inCodeBlock) continue;
+
+      const hashMatch = line.match(/^(#{1,6})\s/);
+      if (hashMatch) {
+        const level = hashMatch[1].length;
+        headingLines.push({ line: i, level });
+        if (level < minLevel) minLevel = level;
+      }
+    }
+
+    if (minLevel <= 1 || minLevel > 6) return;
+    for (const h of headingLines) { if (h.line === cursorLine) return; }
+
+    const drop = minLevel - 1;
+    this._replacing = true;
+    try {
+      for (const h of headingLines) {
+        const original = editor.getLine(h.line);
+        const promoted = original.substring(drop);
+        editor.replaceRange(promoted, { line: h.line, ch: 0 }, { line: h.line, ch: original.length });
+      }
+    } finally {
+      this._replacing = false;
+    }
+  }
+
   // Insert a blank line before headings that don't have one (skip near cursor)
   ensureBlankBeforeHeadings(editor) {
     if (!this.blankBeforeHeadings) return;
@@ -1337,6 +1606,7 @@ class IrisEditorPlugin extends obsidian.Plugin {
         if (inFrontmatter) { if (line === '---') inFrontmatter = false; i++; continue; }
         if (RE_CODE_FENCE.test(line)) { inCodeBlock = !inCodeBlock; i++; continue; }
         if (inCodeBlock) { i++; continue; }
+        if (RE_TABLE_LINE.test(line)) { if (line.trim() !== '') seenBodyContent = true; i++; continue; }
 
         if (RE_HEADING.test(line) && seenBodyContent) {
           const prev = editor.getLine(i - 1);
@@ -1356,9 +1626,281 @@ class IrisEditorPlugin extends obsidian.Plugin {
     }
   }
 
+  /* ============================================================
+     Custom Word Count
+     ============================================================ */
+
+  setupCustomWordCount() {
+    if (this.customWcEl) return;
+    const el = this.addStatusBarItem();
+    el.addClass('iris-word-count', 'mod-clickable');
+    el.addEventListener('click', (evt) => this.openWordCountMenu(evt));
+    this.customWcEl = el;
+    this._wcLineCache = new Map();
+    this.applyCustomWordCount();
+  }
+
+  invalidateWordCountCache() {
+    if (this._wcLineCache) this._wcLineCache.clear();
+    this._wcTotal = null;
+  }
+
+  applyCustomWordCount() {
+    const enabled = this.customWordCount;
+    if (this.customWcEl) this.customWcEl.toggle(enabled);
+    if (enabled) this.updateCustomWordCount({ totalChanged: true });
+  }
+
+  isVanillaWordCountEnabled() {
+    return !!this.app.internalPlugins?.getPluginById?.('word-count')?.enabled;
+  }
+
+  async disableVanillaWordCount() {
+    const wc = this.app.internalPlugins?.getPluginById?.('word-count');
+    if (!wc?.enabled) return false;
+    try {
+      await wc.disable();
+      return true;
+    } catch (e) {
+      console.warn('Iris Editor: failed to disable vanilla word-count plugin', e);
+      return false;
+    }
+  }
+
+  updateCustomWordCount({ totalChanged = false } = {}) {
+    if (!this.customWordCount || !this.customWcEl) return;
+    const view = this.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
+    if (!view) { this.customWcEl.setText(''); this._wcTotal = null; return; }
+    if (totalChanged || this._wcTotal == null) {
+      this._wcTotal = this.countWordsWc(view.editor.getValue());
+    }
+    const selection = view.editor.getSelection?.() || '';
+    const count = selection ? this.countWordsWc(selection) : this._wcTotal;
+    this.customWcEl.setText(`${count.toLocaleString()} word${count === 1 ? '' : 's'}`);
+  }
+
+  scheduleEditWcUpdate() {
+    clearTimeout(this._wcEditTimer);
+    this._wcEditTimer = setTimeout(() => {
+      this.updateCustomWordCount({ totalChanged: true });
+    }, 300);
+  }
+
+  scheduleSelWcUpdate() {
+    if (!this.customWordCount) return;
+    const view = this.app.workspace.getActiveViewOfType(obsidian.MarkdownView);
+    const hasSel = !!(view?.editor?.getSelection?.());
+    if (!hasSel && !this._wcLastHadSelection) return;
+    this._wcLastHadSelection = hasSel;
+    clearTimeout(this._wcSelTimer);
+    this._wcSelTimer = setTimeout(() => {
+      this.updateCustomWordCount({ totalChanged: false });
+    }, 100);
+  }
+
+  countWordsWc(text) {
+    const lines = (text || '').split('\n');
+    const mask = this.buildWcStructuralMask(lines);
+    const re = this.buildWcLineRegex();
+    const cache = this._wcLineCache;
+    let total = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (mask[i]) continue;
+      const line = lines[i];
+      let count;
+      if (cache && cache.has(line)) {
+        count = cache.get(line);
+      } else {
+        count = this.countWcLineWords(line, re);
+        if (cache) {
+          if (cache.size > 10000) cache.clear();
+          cache.set(line, count);
+        }
+      }
+      total += count;
+    }
+    return total;
+  }
+
+  buildWcStructuralMask(lines) {
+    const mask = new Array(lines.length).fill(false);
+    let i = 0;
+    if (lines[0] === '---') {
+      for (let j = 1; j < lines.length; j++) {
+        if (lines[j] === '---') {
+          if (!this.wcIncludeFrontmatter) {
+            for (let k = 0; k <= j; k++) mask[k] = true;
+          }
+          i = j + 1;
+          break;
+        }
+      }
+    }
+    let inFence = null;
+    let inMath = false;
+    let inHtmlComment = false;
+    let inObsComment = false;
+    for (; i < lines.length; i++) {
+      const line = lines[i];
+      let masked = false;
+      if (inFence) {
+        masked = !this.wcIncludeCodeBlocks;
+        if (line.startsWith(inFence)) inFence = null;
+      } else if (inHtmlComment) {
+        masked = !this.wcIncludeComments;
+        if (line.includes('-->')) inHtmlComment = false;
+      } else if (inObsComment) {
+        masked = !this.wcIncludeComments;
+        if (line.includes('%%')) inObsComment = false;
+      } else if (inMath) {
+        masked = !this.wcIncludeMath;
+        if (line.includes('$$')) inMath = false;
+      } else {
+        if (/^```/.test(line)) {
+          inFence = '```';
+          masked = !this.wcIncludeCodeBlocks;
+        } else if (/^~~~/.test(line)) {
+          inFence = '~~~';
+          masked = !this.wcIncludeCodeBlocks;
+        } else {
+          const dollarCount = (line.match(/\$\$/g) || []).length;
+          if (dollarCount % 2 === 1) {
+            inMath = true;
+            masked = !this.wcIncludeMath;
+          } else if (/<!--/.test(line) && !/-->/.test(line)) {
+            inHtmlComment = true;
+            masked = !this.wcIncludeComments;
+          } else {
+            const obsCount = (line.match(/%%/g) || []).length;
+            if (obsCount % 2 === 1) {
+              inObsComment = true;
+              masked = !this.wcIncludeComments;
+            }
+          }
+          if (!masked && !this.wcIncludeTables && /^[ \t]*\|.+\|[ \t]*$/.test(line)) {
+            const next = lines[i + 1];
+            if (next && /^[ \t]*\|[\s:|-]+\|[ \t]*$/.test(next)) {
+              let j = i;
+              while (j < lines.length && /^[ \t]*\|.+\|[ \t]*$/.test(lines[j])) {
+                mask[j] = true;
+                j++;
+              }
+              i = j - 1;
+              continue;
+            }
+          }
+        }
+      }
+      if (masked) mask[i] = true;
+    }
+    return mask;
+  }
+
+  buildWcLineRegex() {
+    if (!this._wcLineRe) {
+      this._wcLineRe = new RegExp(
+        '(`[^`\\n]*`)' +
+        '|(\\$[^$\\n]+\\$)' +
+        '|(%%[^\\n]*?%%)' +
+        '|(<!--[^\\n]*?-->)' +
+        '|(\\[\\^[^\\]\\n]+\\])' +
+        '|(\\[[^\\]\\n]*@[^\\]\\n]+\\]|(?<![A-Za-z@])@[\\w:-]+|\\[\\d+(?:\\s*[-,;]\\s*\\d+)*\\])' +
+        '|!?\\[\\[([^\\]|]+)(?:\\|([^\\]]+))?\\]\\]' +
+        '|!?\\[([^\\]]*)\\]\\([^)]*\\)' +
+        '|([*_~]+)',
+        'g'
+      );
+    }
+    return this._wcLineRe;
+  }
+
+  countWcLineWords(line, re) {
+    let s = line;
+    if (/^#{1,6}\s/.test(s)) {
+      if (!this.wcIncludeHeadings) return 0;
+      s = s.replace(/^#{1,6}\s+/, '');
+    }
+    if (/^[ \t]*>/.test(s)) {
+      if (!this.wcIncludeBlockQuotes) return 0;
+      s = s.replace(/^[ \t]*(?:>+\s?)+/, '');
+    }
+    if (/^\[\^[^\]\n]+\]:/.test(s) && !this.wcIncludeFootnotes) return 0;
+
+    re.lastIndex = 0;
+    s = s.replace(re, (...m) => {
+      if (m[1] !== undefined) return this.wcIncludeCodeBlocks ? m[0] : '';
+      if (m[2] !== undefined) return this.wcIncludeMath ? m[0] : '';
+      if (m[3] !== undefined) return this.wcIncludeComments ? m[0] : '';
+      if (m[4] !== undefined) return this.wcIncludeComments ? m[0] : '';
+      if (m[5] !== undefined) return this.wcIncludeFootnotes ? m[0] : '';
+      if (m[6] !== undefined) return this.wcIncludeCitations ? m[0] : '';
+      if (m[7] !== undefined) return m[8] || m[7];
+      if (m[9] !== undefined) return m[9];
+      return '';
+    });
+
+    let count = 0;
+    for (const tok of s.split(/\s+/)) {
+      if (tok && /[\p{L}\p{N}]/u.test(tok)) count++;
+    }
+    return count;
+  }
+
+  openWordCountMenu(evt) {
+    const menu = new obsidian.Menu();
+    const toggle = (key) => async () => {
+      this[key] = !this[key];
+      await this.saveSettings();
+      this.invalidateWordCountCache();
+      this.updateCustomWordCount({ totalChanged: true });
+    };
+    menu.addItem(item => item
+      .setTitle('Include headings')
+      .setChecked(this.wcIncludeHeadings)
+      .onClick(toggle('wcIncludeHeadings')));
+    menu.addItem(item => item
+      .setTitle('Include block quotes')
+      .setChecked(this.wcIncludeBlockQuotes)
+      .onClick(toggle('wcIncludeBlockQuotes')));
+    menu.addItem(item => item
+      .setTitle('Include tables')
+      .setChecked(this.wcIncludeTables)
+      .onClick(toggle('wcIncludeTables')));
+    menu.addSeparator();
+    menu.addItem(item => item
+      .setTitle('Include code blocks')
+      .setChecked(this.wcIncludeCodeBlocks)
+      .onClick(toggle('wcIncludeCodeBlocks')));
+    menu.addItem(item => item
+      .setTitle('Include math')
+      .setChecked(this.wcIncludeMath)
+      .onClick(toggle('wcIncludeMath')));
+    menu.addSeparator();
+    menu.addItem(item => item
+      .setTitle('Include footnotes')
+      .setChecked(this.wcIncludeFootnotes)
+      .onClick(toggle('wcIncludeFootnotes')));
+    menu.addItem(item => item
+      .setTitle('Include citations')
+      .setChecked(this.wcIncludeCitations)
+      .onClick(toggle('wcIncludeCitations')));
+    menu.addSeparator();
+    menu.addItem(item => item
+      .setTitle('Include frontmatter')
+      .setChecked(this.wcIncludeFrontmatter)
+      .onClick(toggle('wcIncludeFrontmatter')));
+    menu.addItem(item => item
+      .setTitle('Include comments')
+      .setChecked(this.wcIncludeComments)
+      .onClick(toggle('wcIncludeComments')));
+    menu.showAtMouseEvent(evt);
+  }
+
   onunload() {
     if (this._debounceTimer) clearTimeout(this._debounceTimer);
     if (this._refreshTimer) clearTimeout(this._refreshTimer);
+    clearTimeout(this._wcEditTimer);
+    clearTimeout(this._wcSelTimer);
   }
 }
 
@@ -1514,6 +2056,17 @@ class IrisEditorSettingTab extends obsidian.PluginSettingTab {
         .setValue(this.plugin.blankBeforeHeadings)
         .onChange(async (value) => {
           this.plugin.blankBeforeHeadings = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new obsidian.Setting(containerEl)
+      .setName('Promote headings')
+      .setDesc('When all headings are ## or deeper, promote them so the top heading becomes #.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.promoteHeadings)
+        .onChange(async (value) => {
+          this.plugin.promoteHeadings = value;
           await this.plugin.saveSettings();
         })
       );
@@ -1681,6 +2234,17 @@ class IrisEditorSettingTab extends obsidian.PluginSettingTab {
       );
 
     new obsidian.Setting(containerEl)
+      .setName('Auto-alias from "AKA"')
+      .setDesc('When opening or saving a note, scan for "AKA X" or "also known as X" and add X to frontmatter aliases.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.autoAlias)
+        .onChange(async (value) => {
+          this.plugin.autoAlias = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
+    new obsidian.Setting(containerEl)
       .setName('Extra alias keys')
       .setDesc('Additional frontmatter keys to check for aliases (comma-separated).')
       .addText(text => text
@@ -1692,6 +2256,35 @@ class IrisEditorSettingTab extends obsidian.PluginSettingTab {
           this.plugin.refreshNoteNames();
         })
       );
+
+    // --- Word Count ---
+
+    new obsidian.Setting(containerEl).setName('Word count').setHeading();
+
+    new obsidian.Setting(containerEl)
+      .setName('Custom word count')
+      .setDesc('Replace the vanilla word count with one that shows only words. Click the status bar item to toggle what is counted.')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.customWordCount)
+        .onChange(async (value) => {
+          this.plugin.customWordCount = value;
+          await this.plugin.saveSettings();
+          this.plugin.applyCustomWordCount();
+        })
+      );
+
+    if (this.plugin.customWordCount && this.plugin.isVanillaWordCountEnabled()) {
+      new obsidian.Setting(containerEl)
+        .setName('Vanilla word count is still running')
+        .setDesc('Obsidian’s built-in Word count core plugin is still enabled, so both counters are running. Disable it for the performance benefit.')
+        .addButton(btn => btn
+          .setButtonText('Disable vanilla word count')
+          .setCta()
+          .onClick(async () => {
+            await this.plugin.disableVanillaWordCount();
+            this.display();
+          }));
+    }
   }
 
   renderShortcutPreview() {

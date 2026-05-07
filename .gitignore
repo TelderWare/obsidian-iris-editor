@@ -4,3 +4,5 @@ data.json
 .env.*
 dist/
 .DS_Store
+
+.claude/

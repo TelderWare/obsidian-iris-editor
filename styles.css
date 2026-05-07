@@ -39,3 +39,7 @@
 .iris-shortcut-value {
   font-family: var(--font-monospace);
 }
+
+.status-bar-item.iris-word-count {
+    cursor: pointer;
+}
